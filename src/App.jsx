@@ -1,5 +1,7 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import * as XLSX from "xlsx"
+import { db } from "./firebase"
+import { collection, addDoc, deleteDoc, doc, onSnapshot } from "firebase/firestore"
 
 const PRODUCTS = [
   { name: '小花醬', price: 300 },
@@ -34,14 +36,21 @@ export default function App() {
   const [sales, setSales] = useState([])
   const [selectedMonth, setSelectedMonth] = useState(today().slice(0,7))
 
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'sales'), snap => {
+      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      data.sort((a, b) => b.createdAt - a.createdAt)
+      setSales(data)
+    })
+    return unsub
+  }, [])
+
   function toggleProduct(name, defaultPrice) {
     setSelected(prev => {
       const next = Object.assign({}, prev)
       if (next[name]) {
         delete next[name]
-        const newPrices = Object.assign({}, prices)
-        delete newPrices[name]
-        setPrices(newPrices)
+        setPrices(p => { const n = Object.assign({}, p); delete n[name]; return n })
       } else {
         next[name] = 1
         setPrices(p => ({ ...p, [name]: defaultPrice }))
@@ -56,9 +65,7 @@ export default function App() {
       const newQty = (next[name] || 1) + delta
       if (newQty <= 0) {
         delete next[name]
-        const newPrices = Object.assign({}, prices)
-        delete newPrices[name]
-        setPrices(newPrices)
+        setPrices(p => { const n = Object.assign({}, p); delete n[name]; return n })
       } else {
         next[name] = newQty
       }
@@ -66,32 +73,30 @@ export default function App() {
     })
   }
 
-  function submitSale() {
+  async function submitSale() {
     if (!customerName) { alert('請輸入客戶名稱'); return }
     if (Object.keys(selected).length === 0) { alert('請選擇商品'); return }
     const items = Object.keys(selected).map(name => ({
-      name,
-      qty: selected[name],
-      price: prices[name] || 0
+      name, qty: selected[name], price: prices[name] || 0
     }))
     const total = items.reduce((sum, i) => sum + i.qty * i.price, 0)
     const record = {
-      id: Date.now(),
+      createdAt: Date.now(),
       date,
       customerName,
       items,
       total
     }
-    setSales(prev => [record, ...prev])
+    await addDoc(collection(db, 'sales'), record)
     setSelected({})
     setPrices({})
     setCustomerName('')
     alert(`銷售單已建立！總金額 NT$${total}`)
   }
 
-  function deleteSale(id) {
+  async function deleteSale(id) {
     if (!window.confirm('確定要刪除這筆銷售記錄？')) return
-    setSales(prev => prev.filter(s => s.id !== id))
+    await deleteDoc(doc(db, 'sales', id))
   }
 
   const monthOptions = Array.from(new Set([
@@ -103,8 +108,6 @@ export default function App() {
 
   function exportExcel() {
     if (filteredSales.length === 0) { alert('本月沒有銷售記錄'); return }
-
-    // 原始記錄
     const rows = []
     filteredSales.forEach(s => {
       s.items.forEach(item => {
@@ -118,20 +121,14 @@ export default function App() {
         })
       })
     })
-
-    // 彙總表
     const summary = {}
     rows.forEach(r => {
-      if (!summary[r.商品]) {
-        summary[r.商品] = { 商品: r.商品, 總數量: 0, 總金額: 0 }
-      }
+      if (!summary[r.商品]) summary[r.商品] = { 商品: r.商品, 總數量: 0, 總金額: 0 }
       summary[r.商品].總數量 += r.數量
       summary[r.商品].總金額 += r.小計
     })
     const summaryRows = Object.values(summary)
-    const grandTotal = summaryRows.reduce((sum, r) => sum + r.總金額, 0)
-    summaryRows.push({ 商品: '合計', 總數量: '', 總金額: grandTotal })
-
+    summaryRows.push({ 商品: '合計', 總數量: '', 總金額: summaryRows.reduce((sum, r) => sum + r.總金額, 0) })
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '原始記錄')
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), '彙總表')
