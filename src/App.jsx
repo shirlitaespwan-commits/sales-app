@@ -37,10 +37,14 @@ export default function App() {
   const [selectedMonth, setSelectedMonth] = useState(today().slice(0,7))
 
   useEffect(() => {
+    console.log('Firebase 連線中...')
     const unsub = onSnapshot(collection(db, 'sales'), snap => {
+      console.log('收到資料:', snap.docs.length, '筆')
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       data.sort((a, b) => b.createdAt - a.createdAt)
       setSales(data)
+    }, err => {
+      console.error('Firebase 錯誤:', err)
     })
     return unsub
   }, [])
@@ -87,11 +91,18 @@ export default function App() {
       items,
       total
     }
-    await addDoc(collection(db, 'sales'), record)
-    setSelected({})
-    setPrices({})
-    setCustomerName('')
-    alert(`銷售單已建立！總金額 NT$${total}`)
+    try {
+      console.log('準備寫入', record)
+      await addDoc(collection(db, 'sales'), record)
+      console.log('寫入成功')
+      setSelected({})
+      setPrices({})
+      setCustomerName('')
+      alert(`銷售單已建立！總金額 NT$${total}`)
+    } catch(err) {
+      console.error('寫入失敗:', err)
+      alert('寫入失敗：' + err.message)
+    }
   }
 
   async function deleteSale(id) {
